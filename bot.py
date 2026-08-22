@@ -48,7 +48,6 @@ RUSSIAN_CITIES = [
     (45.7372, 48.0307, "Volgograd"),
     (47.5118, 42.9858, "Rostov"),
     (55.1067, 38.8356, "Smolensk"),
-    (51.4942, 36.1854, "Ternopol"),
     (47.2294, 39.7122, "Rostov-on-Don"),
     (53.6027, 40.1848, "Tula"),
     (48.7302, 44.5218, "Moscow Region South"),

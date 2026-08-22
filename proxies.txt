@@ -1,0 +1,27 @@
+# Proxy list - VERIFIED WORKING 2026-08-21 16:15 UTC
+# Tested against https://benzonavt.ru/api/v1/cities AND /stations/nearest (both 200)
+# Format: IP:PORT or http://IP:PORT - bot handles both via ProxyPool._format
+# These 20 were the only ones passing live test out of ~230 tested (~8% success)
+# Free proxies die fast - re-run test_proxies.py if these timeout again
+# For stable stealth use paid RU proxies; direct (no proxy) also works via fallback
+#
+199.7.149.90:3128
+46.36.123.30:81
+18.157.123.132:3128
+164.52.216.153:8080
+45.174.168.53:999
+169.255.78.190:8865
+156.245.234.127:3128
+103.18.45.234:8080
+38.7.18.152:999
+175.139.255.25:8181
+220.243.154.49:10006
+155.138.220.221:80
+38.199.4.139:999
+119.93.178.99:8081
+2.56.178.63:3128
+123.57.94.90:8888
+103.159.249.145:8080
+1.116.47.171:7777
+38.7.195.55:999
+103.172.23.210:1080

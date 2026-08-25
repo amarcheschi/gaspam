@@ -33,13 +33,15 @@ Randomly selects a gas station near a major Russian city and reports fuel availa
 ## How It Works
 
 ```
-1. Pick random city from RUSSIAN_CITIES (22 entries, bot.py:36)
+1. Pick random city from RUSSIAN_CITIES (22 entries, bot.py:38)
 2. GET /api/v1/stations/nearest?lat=&lon=&radius_km=100&limit=300
 3. Random station from returned items
 4. Decide status: 65% yes (with random fuels 92/95/98/100/dt/lpg/cng), 35% no
 5. POST /api/v1/reports {station_id, status, fuel_grades, device_id}
 6. (optional) Verify via POST /stations/{id}/live + GET ?t= cache-bust
 7. Sleep COOLDOWN_SECONDS (300 s default), rotate proxy
+   (+ with --threads N: steps 1-7 run independently in N threads, each with
+      own ProxyPool/device_id, staggered start, [Bot-X] log prefix, bot.py:595)
 ```
 
 * `device_id` is a fresh 32-char hex per cycle (`secrets.token_hex(16)`, `bot.py:91`), matching frontend `getDeviceId()` (`localStorage zaprav:did`).
@@ -54,6 +56,7 @@ Randomly selects a gas station near a major Russian city and reports fuel availa
 - **Proxy rotation** — loads `proxies.txt`, tests via `GET /api/v1/cities`, fallback to direct
 - **Retry logic** — on `SOCKS 10054 / ProxyError / ConnectTimeout` retries 3× with next proxy instead of failing cycle (`bot.py:349`)
 - **Stealth / Verify toggle** — `--no-verify` (default, 2 requests) vs `--verify` (5 requests, polls map)
+- **Multi-threaded** — `--threads N` spawns N independent bot loops (own `device_id`/`ProxyPool`, `threading.Thread`, `bot.py:559`) with `Ctrl+C` handling and `[Bot-X]` log prefix (`bot.py:86`)
 - **Cache-aware verification** — busts CDN with `?t=timestamp` and checks `recent` array, not just icon color
 - **Exact map links** — logs `https://benzonavt.ru/?lat=&lon=&zoom=14` for the *same* station hit, not a random one
 - **City coverage** — Moscow, St. Petersburg, Kazan, etc. (some coordinates approximate - see troubleshooting)
@@ -123,19 +126,28 @@ Fuel picker `random_fuel_grades()` (`bot.py:100`) samples from station's `fuels`
 ```
 usage: bot.py [-h] [--proxies PROXIES] [--iterations ITERATIONS]
               [--cooldown COOLDOWN] [--verify | --no-verify]
+              [--fuel-prob FUEL_PROB] [--no-prob] [--threads THREADS]
 
 options:
   --proxies PROXIES     Path to proxy list (default: proxies.txt)
-  --iterations N        Max reports (default: infinite)
+  --iterations N        Max reports per thread (default: infinite)
   --cooldown SECONDS    Override 300 s (e.g. 10 for testing)
   --verify / --no-verify
                         Enable post-submit polling (extra GETs, detectable).
                         Default --no-verify (stealth: only POST /reports).
-  --fuel-prob, --yes-prob
-						probability of fuel, accepts 0.0-1.0 or 0-100.
+  --fuel-prob, --yes-prob, --fuel-probability FUEL_PROB
+                        Probability of "yes" (has fuel) as 0.0-1.0 or 0-100.
+                        Default 0.65 (65% yes). Use --no-prob for always "no".
+  --threads, -t, --workers, -w THREADS
+                        Number of independent bot threads (default: 1).
+                        Each thread runs its own loop with own device_id/
+                        ProxyPool and staggered start (0.2-0.8s + idx*0.15s).
+                        Example: --threads 5 → 5 concurrent bots;
+                        --threads 3 --iterations 10 → 30 total (10/thread).
+                        Logs prefixed with [Bot-X] (bot.py:86).
 ```
 
-*Implemented `bot.py:430` with `argparse.BooleanOptionalAction` (Python 3.9+). Logs mode at startup.*
+*Implemented `bot.py:516` with `argparse` + `threading` (Python 3.9+ for `BooleanOptionalAction`). Logs mode at startup. `--threads` validated `>=1` (warns `>100`).*
 
 ### Stealth vs Verify
 
@@ -160,6 +172,17 @@ python bot.py --proxies my_private.txt --cooldown 300
 
 # No proxies (direct IP, most reliable)
 python bot.py --proxies "" --iterations 5 --no-verify
+
+# Multi-threaded: 5 concurrent bots, each does 20 reports
+python bot.py --threads 5 --iterations 20 --cooldown 60
+
+# Short alias, 3 workers, stealth, 1s cooldown (load test)
+python bot.py -t 3 --iterations 10 --cooldown 1 --no-verify
+# Equivalent long form
+python bot.py --workers 3 --iterations 10 --cooldown 1 --no-verify
+
+# Threads + verify (more detectable, shows [Bot-X] prefix per thread)
+python bot.py --threads 2 --iterations 1 --verify --cooldown 1
 
 # Dry-run via verifier (no POST)
 python verify_report.py --station-id 4717 --no-submit
@@ -282,4 +305,5 @@ see `LICENSE` on the same repo
 
 ## Changelog
 
+* **2026-08-25** - Added `--threads/-t/--workers/-w` multi-threaded mode (`bot.py:559`): N independent `threading.Thread` workers, own `ProxyPool`/`device_id`, staggered start, `[Bot-X]` log prefix, `Ctrl+C` graceful join.
 * **2026-08-21** - Added `--verify/--no-verify` (stealth default), retry for `10054`, `GET ?t=` verification, `check_proxies.py` in working folder, 20 verified RU proxies, map links.

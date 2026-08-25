@@ -6,11 +6,13 @@ Selects a random station, then reports fuel status with 65/35 probability
 (yes/no), rotating proxies after each station and enforcing a 5-minute cooldown.
 """
 
+import argparse
 import json
 import os
 import random
 import secrets
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -83,7 +85,10 @@ USER_AGENTS = [
 
 def log(msg: str, level: str = "INFO"):
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    print(f"[{ts}] [{level}] {msg}", flush=True)
+    thread = threading.current_thread().name
+    # Prefix with thread name when running multi-threaded (not MainThread)
+    prefix = f"[{thread}] " if thread != "MainThread" else ""
+    print(f"[{ts}] [{level}] {prefix}{msg}", flush=True)
 
 
 # --- Helpers ----------------------------------------------------------------
@@ -509,8 +514,6 @@ def run_bot(proxies_file: str = None, max_iterations: int = None,
 # --- CLI ---------------------------------------------------------------------
 
 def main():
-    import argparse
-
     parser = argparse.ArgumentParser(
         description="Benzonavt fuel-availability report bot."
     )
@@ -553,20 +556,72 @@ def main():
         const=0.0,
         help="Shortcut for --fuel-prob 0 (always report 'no' / no fuel).",
     )
+    parser.add_argument(
+        "--threads", "-t",
+        "--workers", "-w",
+        dest="threads",
+        type=int,
+        default=1,
+        help="Number of independent bot threads to spawn (default: 1). "
+             "Each thread runs its own loop with own device_id/proxy rotation. "
+             "Example: --threads 5 spawns 5 concurrent bots; --threads 3 --iterations 10 = 30 total reports (10 per thread).",
+    )
     args = parser.parse_args()
+
+    if args.threads < 1:
+        parser.error("--threads must be >= 1")
+    if args.threads > 100:
+        log(f"Large thread count {args.threads} - ensure system/proxy pool can handle it.", "WARN")
 
     if args.verify:
         log("Verification ENABLED: will poll station detail after each report (more requests, detectable).")
     else:
         log("Verification DISABLED (stealth): only POST /reports will be sent (less suspicious). Use --verify to enable checks.")
 
-    run_bot(
-        proxies_file=args.proxies,
-        max_iterations=args.iterations,
-        cooldown_override=args.cooldown,
-        verify=args.verify,
-        fuel_probability=args.fuel_prob,
-    )
+    # Single-thread: preserve original behaviour (main thread runs the loop)
+    if args.threads == 1:
+        run_bot(
+            proxies_file=args.proxies,
+            max_iterations=args.iterations,
+            cooldown_override=args.cooldown,
+            verify=args.verify,
+            fuel_probability=args.fuel_prob,
+        )
+        return
+
+    # Multi-thread: spawn N independent workers
+    log(f"Spawning {args.threads} independent bot threads...")
+
+    def _worker(idx: int):
+        # Each thread gets its own run_bot invocation (own ProxyPool, device_id, etc.)
+        # Small stagger to avoid thundering herd on first request
+        if idx > 0:
+            time.sleep(random.uniform(0.2, 0.8) + idx * 0.15)
+        run_bot(
+            proxies_file=args.proxies,
+            max_iterations=args.iterations,
+            cooldown_override=args.cooldown,
+            verify=args.verify,
+            fuel_probability=args.fuel_prob,
+        )
+
+    threads: list[threading.Thread] = []
+    for i in range(args.threads):
+        t = threading.Thread(target=_worker, args=(i,), name=f"Bot-{i+1}", daemon=False)
+        t.start()
+        threads.append(t)
+        log(f"Thread Bot-{i+1} started (tid={t.ident})")
+
+    # Wait for all threads; handle Ctrl+C gracefully
+    try:
+        for t in threads:
+            t.join()
+    except KeyboardInterrupt:
+        log("Interrupted - waiting for threads to exit...", "WARN")
+        # Threads are non-daemon so they will finish current iteration; user can Ctrl+C again to force
+        for t in threads:
+            t.join(timeout=1)
+    log("All threads finished.")
 
 
 if __name__ == "__main__":
